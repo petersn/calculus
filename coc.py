@@ -48,25 +48,76 @@ class Term:
 	def substitute(self, var, term):
 		if self == var:
 			return term
-		return Term(self.kind, *map(lambda t: t.substitute(var, term), self.args))
+		return Term(self.kind, *[arg.substitute(var, term) for arg in self.args])
 
-	def beta_equivalent(self, other):
-		# First, get formal forms.
-		pass
+	def variable_remapping(self, mapping):
+		if self.kind == "var":
+			return Term("var", mapping.get(self.args[0], self.args[0]))
+		return Term(self.kind, *[arg.variable_remapping(mapping) for arg in self.args])
+
+	def free_variables(self):
+		if self.kind == "var":
+			return set([self.args[0]])
+		free_below = union(arg.free_variables() for arg in self.args)
+		# If we're a lambda or a forall then remove our variable from set.
+		if self.kind in ("lambda", "forall"):
+			var = self.args[0].args[0]
+			if var in free_below:
+				free_below.remove(var)
+		return free_below
+
+	@staticmethod
+	def beta_equivalent(term1, term2):
+		# Get formal forms.
+		translation1 = {}
+		translation2 = {}
+		r1 =  self.application_reduce().alpha_canonicalize(translation1)
+		r2 = other.application_reduce().alpha_canonicalize(translation2)
+		if r1 == r2:
+			return translation1, translation2
 
 	def application_reduce(self):
+		# Function applications get reduced...
 		if self.kind == "apply":
 			func, arg = self.args
 			assert func.kind == "lambda"
 			func_var, func_type, func_expr = func.args
 			return func_expr.substitute(func_var, arg)
+		elif self.kind == "var":
+			return self
+		# ... and all other types of terms are passed through.
 		return Term(self.kind, *[arg.application_reduce() for arg in self.args])
 
-	def alpha_canonicalize(self, ):
-		pass
+	def alpha_canonicalize(self, translation=None):
+		translation = translation or {}
+		# If we're a variable, then translate.
+		if self.kind == "var":
+			# Create a new mapping for this variable if one doesn't already exist...
+			if self.args[0] not in translation:
+				translation[self.args[0]] = len(translation) + 1
+			# ... and use it.
+			return Term("var", translation[self.args[0]])
+		elif self.kind in ("lambda", "forall"):
+			# In the special case of lambdas and foralls, we don't propagate changes in the variable up, but do propagate it down.
+			var = self.args[0].args[0]
+			assert var not in translation, "BUG BUG BUG"
+			# Make a temporary entry for the lambda's variable.
+			translation[var] = len(translation) + 1
+
+		# Recursively canonicalize.
+		canonicalized = Term(self.kind, *[arg.alpha_canonicalize(translation) for arg in self.args])
+
+		# Remove our temporary entry, as once we leave the lambda/forall, the scope of its variable is over, and it can be reused.
+		if self.kind in ("lambda", "forall"):
+			translation.pop(var)
+
+		return canonicalized
 
 	def __eq__(self, other):
 		return self.kind == other.kind and all(i == j for i, j in zip(self.args, other.args))
+
+	def __ne__(self, other):
+		return not (self == other)
 
 	def __str__(self):
 		if self.kind == "type":
@@ -90,15 +141,20 @@ class HasType:
 
 	def well_scoped(self, used):
 		if self.term1.kind == "var":
-			# If this hastype is on a variable, then guarantee that the variable is fresh.
-			if self.term1.args[0] in used:
-				return False
+#IGNORE:			# If this hastype is on a variable, then guarantee that the variable is fresh.
+#			if self.term1.args[0] in used:
+#				print "FAILING FOR THIS REASON"
+#				return False
 			used = used | set([self.term1.args[0]])
 		elif not self.term1.well_scoped(used):
 			return False
 		if not self.term2.well_scoped(used):
 			return False
 		return True
+
+	def alpha_canonicalize(self, translation=None):
+		translation = translation or {}
+		return HasType(self.term1.alpha_canonicalize(translation), self.term2.alpha_canonicalize(translation))
 
 	def defined_vars(self):
 		return set([self.term1.args[0]] if self.term1.kind == "var" else [])
@@ -120,20 +176,27 @@ class Judgement:
 			if term == hastype.term1:
 				return hastype.term2
 
-	def well_formed(self):
+	def assert_well_formed(self):
 		# Check a few conditions.
 		# 1) Guarantee that the dependency graph of variables referenced in the context is acyclic.
+		# XXX: EVERYTHING IS BROKEN UNTIL THIS IS ADDED.
 		pass
 		# 2) Guarantee that each contextum is well scoped given the others. 
 		# TODO: Evaluate, just the others before it? I think this is unnecessary, as acyclicness implies this.)
 		for i in xrange(len(self.context)):
 			others_defined = union(c.defined_vars() for c in self.context[:i] + self.context[i+1:])
 			if not self.context[i].well_scoped(others_defined):
-				return False
+				raise Exception("Context %s isn't well scoped given the others." % self.context[i])
 		# 3) Guarantee that all variables in the result are well scoped.
 		context_defined = union(c.defined_vars() for c in self.context)
 		if not self.result.well_scoped(context_defined):
-			return False
+			raise Exception("Result isn't well scoped.")
+		# 4) Guarantee that there are no free variables in the result or any contextum that don't appear in the context.
+		to_check = [self.result.term1, self.result.term2]
+		for contextum in self.context:
+			to_check.extend([contextum.term1, contextum.term2])
+		if not all(term.free_variables().issubset(context_defined) for term in to_check):
+			raise Exception("Free variables.")
 		return True
 
 	def inference_rule(f):
@@ -143,16 +206,16 @@ class Judgement:
 			for arg in args:
 				if isinstance(arg, Judgement):
 					assert arg.proven, "Input judgement to inference rule not proven!"
-					assert arg.well_formed(), "Input judgement to inference rule not well formed!"
+					assert arg.assert_well_formed(), "Input judgement to inference rule not well formed!"
 			judgement = f(*args)
 			# Guarantee that the output judgement(s) are well formed, and declare them all proven.
 			# The list case is entirely just for rule 3, which returns two judgements.
 			if isinstance(judgement, list):
 				for j in judgement:
-					assert j.well_formed()
+					assert j.assert_well_formed(), "Bad judgement: %s" % (j,)
 					j.proven = True
 			else:
-				assert judgement.well_formed()
+				assert judgement.assert_well_formed(), "Bad judgement: %s" % (judgement,)
 				judgement.proven = True
 			return judgement
 		_ = staticmethod(_)
@@ -168,13 +231,14 @@ class Judgement:
 		A, K = j.result.term1, j.result.term2
 		assert K.kind in ("prop", "type")
 		# Here freshness is automatically handled for us by the checks of inference_rule.
-		return Judgement(gamma + [HasType(x, A)], HasType(x, A))
+		return Judgement(j.context + [HasType(x, A)], HasType(x, A))
 
 	@inference_rule
 	def rule3(x, j1, j2):
+		assert isinstance(x, Term) and x.kind == "var"
 		A = j1.read_context(x)
 		# Assert that x is actually in one of the contexts.
-		assert A != None
+		assert A is not None
 		# Further assert that the contexts are the same, modulo order.
 		assert j1.sorted_context() == j2.sorted_context()
 		# Assert that the judgements chain like ``t : B : K''.
@@ -183,6 +247,7 @@ class Judgement:
 		# ... further assert that K is either Prop or Type.
 		assert K.kind in ("prop", "type")
 		new_context = [contextum for contextum in j1.context if contextum.term1 != x]
+		print map(str, new_context), [contextum.term1 != x for contextum in j1.context], x
 		assert len(new_context) == len(j1.context) - 1, "BUG BUG BUG"
 		return [
 			Judgement(new_context, HasType(Term("lambda", x, A, t), Term("forall", x, A, B))),
@@ -203,31 +268,125 @@ class Judgement:
 		return Judgement(j1.context, HasType(Term("apply", M, N), B.substitute(x, N)))
 
 	@inference_rule
-	def rule5(j1, j2):
-		M, A = j1.result.term1, j1.result.term2
-		B, K = j2.result.term1, j2.result.term2
-		# Guarantee that K is either Prop or Type.
-		assert K.kind in ("prop", "type")
+	def rule5(j, term):
+		M, A = j.result.term1, j.result.term2
+#		B, K = j2.result.term1, j2.result.term2
+#		# Guarantee that K is either Prop or Type.
+#		assert K.kind in ("prop", "type")
 		# Guarantee that the two judgements have the same context. (TODO: Is this necessary?)
-		assert j1.sorted_context() == j2.sorted_context()
+#		assert j.sorted_context() == j2.sorted_context()
 		# Require beta-equivalence of A and B.
-		assert A.beta_equivalent(B)
-		return Judgement(j1.context, HasType(M, B))
+		result = Term.beta_equivalent(A, B)
+		assert result != None
+		translation1, translation2 = result
+		# We invert the second dictionary, and compose with the first, to get a B -> A mapping.
+		remapping = {v: translation1[k] for k, v in translation2.iteritems()}
+		# We now reduce remapping to just the free variables of B.
+		B_free_variables = B.free_variables()
+		remapping = {k: v for k, v in remapping.iteritems() if k in B_free_variables}
+		B = B.variable_remapping(remapping)
+		# This is so that B is allowed to be an alpha renaming of A, but not on free variables --
+		# those are mapped to the appropriate context-defined variables of A.
+#IGNORE:		# We now reduce this mapping down to just the variables that appear in j.context.
+#IGNORE:		# We will apply this mapping as a substitution on B before yielding the result judgement.
+#IGNORE:		# This is so that B is allowed to be an alpha renaming of A, but not on free variables --
+#IGNORE:		# those must be remapped to the context names of variables in A.
+		return Judgement(j.context, HasType(M, B))
+
+	@inference_rule
+	def rule6(j, term):
+		return Judgement(j.context, HasType(term, j.read_context(term)))
 
 	def __str__(self):
 		context_str = ", ".join(map(str, self.context))
 		if context_str != "":
 			context_str += " "
-		return "%s\xe2\x8a\xa2 %s" % (context_str, self.result)
+		color_start = color_end = ""
+		if self.proven:
+			color_start = "\x1b[91m"
+			color_end = "\x1b[0m"
+		return "%s%s\xe2\x8a\xa2%s %s" % (context_str, color_start, color_end, self.result)
 
-t = Term("lambda", Term("var", 1), Term("var", 2), Term("var", 1))
-j = Judgement([
-	HasType(Term("var", 2), Term("type"))
-], HasType(t, Term("forall", Term("var", 1), Term("var", 2), Term("var", 2))))
-print j
-assert j.well_formed()
+def parse_term(s):
+	for op in "():.":
+		s = s.replace(op, " %s " % op)
+	s = s.strip().split()
+	name_mapping = {}
+	def to_var(name):
+		if name not in name_mapping:
+			name_mapping[name] = len(name_mapping) + 1
+		return Term("var", name_mapping[name])
 
-print Judgement.rule1([])
+	def parse(toks, i):
+		if toks[i] == "(" and toks[i+1] in ["fun", "forall"]:
+			var = to_var(toks[i+2])
+			assert toks[i+3] == ":"
+			type_term, j = parse(toks, i + 4)
+			assert toks[j] == "."
+			expr_term, k = parse(toks, j + 1)
+			assert toks[k] == ")"
+			kind = {"fun": "lambda", "forall": "forall"}[toks[i+1]]
+			return Term(kind, var, type_term, expr_term), k + 1
+		elif toks[i] == "(":
+			applicand, j = parse(toks, i + 1)
+			applicee, k = parse(toks, j + 1)
+			assert toks[k] == ")"
+			return Term("apply", applicand, applicee), k + 1
+		return to_var(toks[i]), i + 1
 
-# Now 
+	term, i = parse(s, 0)
+	assert i == len(s)
+	return term
+
+def build_term(term):
+	# Begin by reducing the term to a tree of foralls.
+	term = term.application_reduce()
+	print "Initial form:", term
+
+	# Compute a judgement for each free variable.
+	free_judgements = {}
+	for var in term.free_variables():
+		j = Judgement.rule2(Term("var", var), Judgement.rule1([]))
+		free_judgements[var] = j
+	print "Free:", ", ".join("%s => %s" % (k, v) for k, v in free_judgements.iteritems())
+
+	def build(term):
+		if term.kind == "var":
+			return #Judgement.rule2(
+		elif term.kind == "lambda":
+			var, var_type, expr = term.args
+			j1, j1_meta = build(var_type)
+			j2, j2_meta = build(expr)
+			print j1, j1_meta
+			print j2, j2_meta
+
+	return build(term)
+
+if True:
+	t = Term("lambda", Term("var", 1), Term("var", 3), Term("var", 1))
+	j = Judgement([
+		HasType(Term("var", 3), Term("type"))
+	], HasType(t, Term("forall", Term("var", 1), Term("var", 3), Term("var", 3))))
+	print "Judgement:  ", j
+	print "Alpha-canon:", j.result.alpha_canonicalize()
+	#print j.result.term2.free_variables()
+	assert j.assert_well_formed()
+
+	j1 = Judgement.rule1([])
+	print "j1:", j1
+	j2 = Judgement.rule2(Term("var", 2), j1)
+	print "j2:", j2
+	j3 = Judgement.rule2(Term("var", 1), j2)
+	print "j3:", j3
+	j4 = Judgement.rule6(j3, Term("var", 2))
+	print "j4:", j4
+	j5 = Judgement.rule3(Term("var", 1), j3, j4)
+	print "j5:", j5[0], " -- ", j5[1]
+	j6 = Judgement.rule2(Term("var", 2), j5[1])
+	print "j6:", j6
+#	print "j4:", j4
+	exit()
+	# Now 
+
+build_term(parse_term("(fun x: A. x)"))
 

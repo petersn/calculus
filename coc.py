@@ -247,7 +247,6 @@ class Judgement:
 		# ... further assert that K is either Prop or Type.
 		assert K.kind in ("prop", "type")
 		new_context = [contextum for contextum in j1.context if contextum.term1 != x]
-		print map(str, new_context), [contextum.term1 != x for contextum in j1.context], x
 		assert len(new_context) == len(j1.context) - 1, "BUG BUG BUG"
 		return [
 			Judgement(new_context, HasType(Term("lambda", x, A, t), Term("forall", x, A, B))),
@@ -352,6 +351,8 @@ def build_term(term):
 
 	def build(term):
 		if term.kind == "var":
+			if term.args[0] in free_judgements:
+				return free_judgements
 			return #Judgement.rule2(
 		elif term.kind == "lambda":
 			var, var_type, expr = term.args
@@ -382,11 +383,13 @@ if True:
 	print "j4:", j4
 	j5 = Judgement.rule3(Term("var", 1), j3, j4)
 	print "j5:", j5[0], " -- ", j5[1]
-	j6 = Judgement.rule2(Term("var", 2), j5[1])
-	print "j6:", j6
+#	j6 = Judgement.rule2(Term("var", 2), j5[1])
+#	print "j6:", j6
 #	print "j4:", j4
-	exit()
+#	exit()
 	# Now 
+
+print "\n\n"
 
 build_term(parse_term("(fun x: A. x)"))
 

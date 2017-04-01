@@ -15,12 +15,11 @@ Proof. {
   subst.
   exists (x0 * x).
   rewrite <- mult_assoc.
-  exact eq_refl.
+  reflexivity.
 } Qed.
 
 Lemma div_mult_compat : forall a b c, divides a b -> divides a (c * b).
 Proof. {
-  intros.
   firstorder.
   subst.
   exists (c * x).
@@ -34,7 +33,7 @@ Fixpoint divides_decider_helper (a b k : nat) : bool :=
   | S k' => if beq_nat (k * a) b then true else
              divides_decider_helper a b k'
   end.
-  
+
 Definition divides_decider (a b : nat) : bool := divides_decider_helper a b b.
 
 Lemma at_least_as_big : forall a b, b <> 0 -> a <= a * b.
@@ -287,14 +286,6 @@ Proof. {
   omega.
 } Qed.
 
-(* Fixpoint composites_can_be_factored : forall n, 2 <= n -> (~ prime n) -> exists a b, (2 <= a /\ 2 <= b /\ n = a * b). *)
-
-Theorem composites_can_be_factored : forall n, 2 <= n -> (~ prime n) -> exists a b, (2 <= a /\ 2 <= b /\ n = a * b).
-Proof. {
-  firstorder.
-  
-Admitted.
-
 Theorem cant_be_factored_is_prime : forall p, cant_be_factored p -> prime p.
 Proof. {
   firstorder.
@@ -458,11 +449,30 @@ Proof. {
   intros.
   induction l.
   {
-    intro.
-    simpl in H0.
-    assumption.
+    simpl.
+    firstorder.
   }
   {
+    unfold list_max in H.
+    fold list_max in H.
+    simpl.
+    destruct (eq_nat_dec a k).
+    {
+      rewrite e in H.
+      SearchAbout (_ <= max _ _).
+      pose proof Max.le_max_l k (list_max l).
+      omega.
+    }
+    {
+      intro.
+      firstorder.
+      apply NPeano.Nat.max_lub_lt_iff in H.
+      firstorder.
+    }
+  }
+} Qed.
+
+(*
     simpl.
     intro.
     simpl in H.
@@ -478,6 +488,7 @@ Proof. {
     }
   }
 } Qed.
+*)
 
 Definition infinitely_many_primes := forall k, exists p, k <= p /\ prime p.
 Definition list_of_all_primes_is_bad := forall l : list nat, (forall p, In p l -> prime p) -> (forall p, prime p -> In p l) -> False.
@@ -510,6 +521,12 @@ Proof. {
   omega.
 } Qed.
 
+Fixpoint sum_up' (n : nat) : nat :=
+  match n with
+  | 0 => 0
+  | S k => n + sum_up' k
+  end.
+
 Fixpoint sum_up (n : nat) : nat.
 Proof.
   destruct (eq_nat_dec n 0).
@@ -517,13 +534,14 @@ Proof.
     exact 0.
   }
   {
-    induction n.
+    destruct n.
     omega.
     exact (n + sum_up n).
   }
 Defined.
 
-Fixpoint prime_prover_innerloop n (k : nat) (lower : 1 < k) (upper : k < n) : (forall x, k <= x -> x < n -> ~ divides x n) -> { prime n } + { ~ prime n }.
+Fixpoint prime_prover_innerloop n (k : nat) (lower : 1 < k) (upper : k < n) :
+  (forall x, k <= x -> x < n -> ~ divides x n) -> { prime n } + { ~ prime n }.
 Proof.
   intro.
   rename H into good_so_far.
@@ -539,7 +557,7 @@ Proof.
     firstorder.
   }
   (* Otherwise, decrement k, and keep going. *)
-  induction k.
+  destruct k.
   omega.
   destruct (le_dec 2 n).
   { 
@@ -619,6 +637,137 @@ Proof. {
     subst.
     assumption.
   }
+} Defined.
+
+(* Fixpoint composites_can_be_factored : forall n, 2 <= n -> (~ prime n) -> exists a b, (2 <= a /\ 2 <= b /\ n = a * b). *)
+
+Theorem if_one_divisor_is_proper_so_is_the_other :
+  forall a b c, 2 <= c -> c = a * b -> 2 <= b -> b < c -> (2 <= a < c).
+Proof.
+  intros.
+  destruct (le_lt_dec a 1).
+  {
+    destruct (eq_nat_dec a 0).
+    subst.
+    omega.
+    assert (a = 1).
+    omega.
+    subst.
+    omega.
+  }
+  firstorder.
+  assert (a <> 1) as a_nz. omega.
+  assert (b <> 1) as b_nz. omega.
+  pose proof involved_in_factorization_means_in_range a b c H0 H a_nz b_nz.
+  firstorder.
+Qed.
+
+Definition has_prop_div n := exists a, (2 <= a /\ a < n /\ divides a n).
+
+Theorem no_prop_div_is_prime : forall n, 2 <= n -> (~ has_prop_div n) -> prime n.
+Proof.
+  intros.
+  apply not_divisible_is_prime.
+  firstorder.
+Qed.
+
+Theorem composites_have_at_least_one_proper_divisor :
+  forall n, 2 <= n -> (~ prime n) -> has_prop_div n.
+Proof.
+  intros.
+  Fixpoint divisor_finder (n search_bound : nat) :
+    (2 <= n) ->
+    (forall x, search_bound < x -> x < n -> ~ divides x n) ->
+    { has_prop_div n } + { ~ has_prop_div n }.
+  Proof.
+    intros.
+    destruct search_bound.
+    {
+      clear divisor_finder.
+      specialize (H0 1).
+      assert (0 < 1). omega.
+      pose proof H0 H1 H.
+      clear H0.
+      firstorder.
+      pose proof (H0 n).
+      omega.
+    }
+    {
+      (* Get some basic facts. *)
+      (* fact 1: search_bound < n *)
+      destruct (le_lt_dec n (S search_bound)).
+      {
+        specialize (divisor_finder n search_bound H).
+        assert (forall x, search_bound < x -> x < n -> ~ divides x n).
+        intros.
+        omega.
+        exact (divisor_finder H1).
+      }
+      (* fact 2: search_bound <> 0 *)
+      destruct (eq_nat_dec search_bound 0).
+      {
+        subst.
+        right.
+        cbv [has_prop_div].
+        clear divisor_finder.
+        intro.
+        destruct H1.
+        firstorder.
+      }
+      (* Now we check whether or not (S search_bound) actually divides n. *)
+      destruct (divides_dec (S search_bound) n).
+      {
+        (* If so, then we have a proper divisor. *)
+        left.
+        cbv [has_prop_div].
+        pose proof d as d'.
+        destruct d.
+        (* In particular, it's the divisor x. *)
+        exists x.
+        (* Now we show properness. *)
+        assert (2 <= S search_bound) as rf.
+        omega.
+        pose proof if_one_divisor_is_proper_so_is_the_other x (S search_bound) n H H1 rf l.
+        clear divisor_finder H0.
+        firstorder.
+        apply you_divide_folks_you_multiplied_to_make_l with (b := (S search_bound)).
+        assumption.
+      }
+      (* Do the recursive call. *)
+      assert (forall x, search_bound < x -> x < n -> ~ divides x n).
+      {
+        intros.
+        destruct (eq_nat_dec x (S search_bound)).
+        {
+          subst.
+          assumption.
+        }
+        specialize (H0 x).
+        clear divisor_finder n1.
+        firstorder.
+      }
+      exact (divisor_finder n search_bound H H1).
+    }
+  Defined.
+  assert (forall x, n < x -> x < n -> ~ divides x n) as initial_proof.
+  { intros. omega. }
+  pose proof divisor_finder n n H initial_proof as decided.
+  destruct decided.
+  assumption.
+  apply no_prop_div_is_prime in n0.
+  contradiction.
+  assumption.
+Qed.
+
+Theorem composites_can_be_factored : forall n, 2 <= n -> (~ prime n) -> exists a b, (2 <= a /\ 2 <= b /\ n = a * b).
+Proof. {
+  intros.
+  pose proof composites_have_at_least_one_proper_divisor n H H0.
+  firstorder.
+  exists x0.
+  exists x.
+  pose proof if_one_divisor_is_proper_so_is_the_other x0 x n.
+  firstorder.
 } Qed.
 
 (* We now implement a simple trial division function, and prove that it decides primality. *)
@@ -788,86 +937,92 @@ Proof. {
   intros.
   intro.
   firstorder.
-  destruct (eq_nat_dec x x0).
+  rename x into div_old.
+  rename x0 into div_new.
+  destruct (eq_nat_dec div_old div_new).
   {
     subst.
     omega.
   }
   {
-    destruct (lt_dec x x0).
-Admitted.
+    destruct (le_lt_dec div_old div_new).
+    {
+      assert (div_old < div_new) as l'. omega.
+      clear l.
+      rename l' into l.
+      Lemma product_made_bigger : forall a b c, a < b -> a * c + c <= b * c.
+      Proof.
+        intros.
+        unfold lt in H.
+        rewrite <- mult_succ_l.
+        apply mult_le_compat; omega.
+      Qed.
+      pose proof product_made_bigger div_old div_new a l.
+      rewrite <- H1 in H3.
+      rewrite <- H2 in H3.
+      omega.
+    }
+    {
+      pose proof mult_lt_compat_r div_new div_old a.
+      firstorder.
+    }
+  }
+} Qed.
 
 Theorem list_product_not_zero :
   forall l, (~ In 0 l) -> list_product l <> 0.
 Proof. {
-  intros.
-  induction l.
-  simpl.
+  firstorder.
+  induction l; simpl.
   omega.
-  simpl.
   simpl in H.
-  apply Decidable.not_or in H.
-  destruct H.
-  apply IHl in H0.
+  firstorder.
   apply NPeano.Nat.neq_mul_0.
   firstorder.
 } Qed.
 
-Theorem list_product_bigger_than_max_when_list_contains_more_than_one_element_and_no_one_weak :
-  forall l, 1 < length l -> (~ In 0 l) -> list_max l <= list_product l.
+Theorem list_max_le_list_product_when_list_contains_no_one :
+  forall l, (~ In 0 l) -> list_max l <= list_product l.
 Proof. {
   intros.
   induction l.
   {
     simpl.
-    auto.
+    omega.
   }
   {
-    simpl in H0.
-    apply Decidable.not_or in H0.
-    destruct H0.
+    simpl in H.
+    apply Decidable.not_or in H.
+    destruct H.
 
     simpl.
     apply NPeano.Nat.max_lub.
     {
       pose proof list_product_not_zero l.
-      apply H2 in H1.
+      apply H1 in H0.
       apply at_least_as_big; assumption.
     }
     {
       simpl in H.
-      assert (1 < length l).
-      {
-        destruct (eq_nat_dec (length l) 0).
-        {
-          assert (l = nil).
-          destruct l.
-          reflexivity.
-          simpl in e.
-          omega.
-          subst l.
-          rewrite e in H.
-          omega.
-        }
-        destruct (eq_nat_dec (length l) 1).
-        {
-          rewrite e in IHl.
-          admit.
-        }
-        admit.
-      }
-      admit.
-Admitted.
+      apply IHl in H0.
+      rewrite <- mult_1_l at 1.
+      apply mult_le_compat; omega.
+    }
+  }
+} Qed.
 
+(*
 (* I had a hard time finding a standard library result for this... *)
 Theorem multiplying_by_at_least_two_makes_strictly_bigger :
   forall a b, 2 <= b -> a <> 0 -> a < a * b.
 Proof.
   intros.
 Admitted.
+*)
 
 (* apply NPeano.Nat.mult_lt_mono_noneg. *)
 
+(*
 Theorem list_product_bigger_than_max_when_list_contains_more_than_one_element_and_no_one :
   forall l, 1 < length l -> (~ In 0 l) -> (~ In 1 l) -> list_max l < list_product l.
 Proof.
@@ -938,6 +1093,7 @@ Proof.
   }
 
 Admitted.
+*)
 
 Theorem there_are_at_least_two_primes :
   forall l, (forall p, prime p -> In p l) -> 2 <= length l.
@@ -1003,9 +1159,9 @@ Proof.
   exact (H1 check H4).
   pose proof (H0 new_prime H2).
   (* However, we now show that new_prime cannot be in the list, because it's bigger than the maximum. *)
-  pose proof list_product_bigger_than_max_when_list_contains_more_than_one_element_and_no_one as prod_big.
+  pose proof list_max_le_list_product_when_list_contains_no_one as prod_big.
   pose proof there_are_at_least_two_primes l H0 as at_least_two_primes.
-  pose proof prod_big l at_least_two_primes.
+  pose proof prod_big l.
   
   pose proof no_elements_bigger_than_max l as no_bigger.
   assert (forall p, (~ prime p) -> (~ In p l)) as exclusion.
@@ -1014,7 +1170,7 @@ Proof.
     intro.
     exact (H5 (H p H6)).
   }
-  pose proof H4 (exclusion 0 zero_not_prime) (exclusion 1 one_not_prime).
+  pose proof H4 (exclusion 0 zero_not_prime). (* (exclusion 1 one_not_prime). *)
   assert (list_max l < S (list_product l)) as final_sizing.
   omega.
   subst new_prime.

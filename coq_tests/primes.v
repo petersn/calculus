@@ -1133,6 +1133,13 @@ Proof. {
   omega.
 } Qed.
 
+Theorem asdf : 0 = 1 -> False.
+Proof.
+  discriminate.
+Qed.
+
+Print asdf.
+
 Theorem list_of_all_primes_is_bad' : list_of_all_primes_is_bad.
 Proof.
   cbv [list_of_all_primes_is_bad].
@@ -1175,6 +1182,230 @@ Proof.
   omega.
   subst new_prime.
   exact ((no_bigger (S (list_product l)) final_sizing) H3).
+Qed.
+
+Definition prime_list_for k l := (In k l -> prime k) /\ (prime k -> In k l).
+
+Theorem no_number_beyond_which_no_primes : ~ exists k, forall n, n > k -> ~ prime n.
+Proof.
+  intro.
+  destruct H as [prime_bound].
+  (* Given a prime bound k, we can construct a list of all primes. *)
+  (* Here up_to starts at prime_bound, and with nil, and counts down to zero. *)
+  Fixpoint make_list_of_primes prime_bound up_to so_far (up_to_constraint : up_to <= prime_bound) :
+    (forall n,
+     ((S up_to) <= n -> n <= prime_bound -> prime n -> In n so_far) /\
+     (In n so_far -> prime n) /\
+     (prime_bound < n -> ~ In n so_far)) ->
+    exists l, (forall n,
+     (n <= prime_bound -> prime n -> In n l) /\
+     (In n l -> prime n) /\
+     (prime_bound < n -> ~ In n l)).
+  Proof.
+    intro.
+    (* Start by destructing on up_to. *)
+    destruct up_to.
+    {
+      clear make_list_of_primes. (* No recursive calls in this branch! *)
+      exists so_far.
+      intro.
+      split.
+      {
+        intros.
+        assert (1 <= n).
+        { unfold prime in H1. apply proj1 in H1. omega. }
+        firstorder.
+      }
+      {
+        exact (proj2 (H n)).
+      }
+    }
+    {
+      assert (up_to <= prime_bound) as up_to_constraint'. omega.
+      (* Here we test if up_to is a prime, and if so, add it into the list. *)
+      destruct (prime_dec (S up_to)).
+      {
+        remember ((S up_to) :: so_far) as new_list.
+        (* Prove that our new list provides updated conditions. *)
+        assert (forall n,
+          (S up_to <= n ->
+           n <= prime_bound -> prime n -> In n new_list) /\
+          (In n new_list -> prime n) /\
+          (prime_bound < n -> ~ In n new_list)) as preconditions.
+        {
+          intro.
+          split.
+          {
+            intros.
+            destruct (eq_nat_dec (S up_to) n).
+            {
+              subst.
+              simpl.
+              left.
+              reflexivity.
+            }
+            {
+              assert (S (S up_to) <= n). omega.
+              pose proof H n.
+              clear make_list_of_primes H.
+              intros.
+              rewrite Heqnew_list.
+              right.
+              firstorder.
+            }
+          }
+          {
+            clear make_list_of_primes.
+            split.
+            {
+              rewrite Heqnew_list.
+              simpl.
+              intro.
+              destruct H0.
+              { rewrite H0 in p. assumption. }
+              {
+                specialize (H n).
+                apply proj2 in H.
+                apply proj1 in H.
+                apply H in H0.
+                assumption.
+              }
+            }
+            {
+              intro.
+              rewrite Heqnew_list.
+              simpl.
+              intro.
+              destruct H1.
+              {
+                omega. 
+              }
+              {
+                pose proof (proj2 (proj2 (H n)) H0).
+                contradiction.
+              }
+            }
+          }
+        }
+        (* Do a recursive call! *)
+        exact (make_list_of_primes prime_bound up_to new_list up_to_constraint' preconditions).
+      }
+      {
+        rename n into p.
+        (* If the number isn't prime, then we're fine as is, pretty much. *)
+        rename so_far into new_list.
+        assert (forall n,
+          (S up_to <= n ->
+           n <= prime_bound -> prime n -> In n new_list) /\
+          (In n new_list -> prime n) /\
+          (prime_bound < n -> ~ In n new_list)) as preconditions.
+        {
+          intro.
+          split.
+          {
+            intros.
+            destruct (eq_nat_dec (S up_to) n).
+            {
+              subst.
+              contradiction.
+            }
+            {
+              assert (S (S up_to) <= n). omega.
+              pose proof H n.
+              clear make_list_of_primes H.
+              intros.
+              exact (proj1 H4 H3 H1 H2).
+            }
+          }
+          {
+            exact (proj2 (H n)).
+          }
+        }
+        (* Do a recursive call! *)
+        exact (make_list_of_primes prime_bound up_to new_list up_to_constraint' preconditions).
+      }
+    } 
+  Defined.
+
+(*
+  Theorem make_list_of_primes prime_bound up_to so_far :
+    (forall n,
+     ((S up_to) <= n -> n <= prime_bound -> prime n -> In n so_far) /\
+     (In n so_far -> prime n) /\
+     (prime_bound < n -> ~ In n so_far)) ->
+    exists l, (forall n,
+     (n <= prime_bound -> prime n -> In n l) /\
+     (In n l -> prime n) /\
+     (prime_bound < n -> ~ In n l)).
+  Proof.
+  Admitted.
+*)
+
+  assert (forall n,
+           ((S prime_bound) <= n -> n <= prime_bound -> prime n -> In n nil) /\
+           (In n nil -> prime n) /\
+           (prime_bound < n -> ~ In n nil)) as base_case.
+  {
+    intros.
+    firstorder.
+  }
+  assert (prime_bound <= prime_bound) as up_to_constraint. omega.
+  pose proof make_list_of_primes prime_bound prime_bound nil up_to_constraint base_case as list_of_all_primes.
+  clear base_case.
+  destruct list_of_all_primes as [prime_list].
+  rename H0 into prime_list_good.
+
+  assert (forall p, (In p prime_list -> prime p) /\ (prime p -> In p prime_list)).
+  {
+    intros.
+    split; intro.
+    {
+      exact (proj1 (proj2 (prime_list_good p)) H0).
+    }
+    {
+      pose proof proj1 (prime_list_good p).
+      destruct (le_lt_dec p prime_bound); firstorder.
+    }
+  }
+
+  assert (forall p, In p prime_list -> prime p) as cond1.
+  {
+    intro.
+    specialize (H0 p).
+    destruct H0.
+    assumption.
+  }
+  assert (forall p, prime p -> In p prime_list) as cond2.
+  {
+    intro.
+    specialize (H0 p).
+    destruct H0.
+    assumption.
+  }
+  exact (list_of_all_primes_is_bad' prime_list cond1 cond2).
+Qed.
+
+Theorem the_thing : forall l, ~ (forall p, In p l <-> prime p).
+Proof.
+  pose proof list_of_all_primes_is_bad'.
+  unfold list_of_all_primes_is_bad in H.
+  intros.
+  intro.
+  assert (forall p, In p l -> prime p) as bad1.
+  clear H.
+  firstorder.
+  assert (forall p, prime p -> In p l) as bad2.
+  clear H.
+  firstorder.
+  exact (H l bad1 bad2).
+Qed.
+
+Theorem always_not_not_a_bigger_prime : forall n, ~ ~ exists p, p > n /\ prime p.
+Proof.
+  intros.
+  intro.
+  pose proof no_number_beyond_which_no_primes.
+  firstorder.
 Qed.
 
 (* This comment is to work around a bug in company coq. *)

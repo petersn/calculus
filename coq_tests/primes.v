@@ -1402,9 +1402,82 @@ Qed.
 
 Theorem always_not_not_a_bigger_prime : forall n, ~ ~ exists p, p > n /\ prime p.
 Proof.
-  intros.
-  intro.
   pose proof no_number_beyond_which_no_primes.
+  firstorder.
+Qed.
+
+Theorem there_is_always_a_bigger_prime : forall n, exists p, n < p /\ prime p.
+Proof.
+  intros.
+  rename n into prime_bound.
+  assert (forall n,
+           ((S prime_bound) <= n -> n <= prime_bound -> prime n -> In n nil) /\
+           (In n nil -> prime n) /\
+           (prime_bound < n -> ~ In n nil)) as base_case.
+  {
+    intros.
+    firstorder.
+    omega.
+  }
+  assert (prime_bound <= prime_bound) as up_to_constraint. omega.
+  pose proof make_list_of_primes prime_bound prime_bound nil up_to_constraint base_case as list_of_all_primes.
+  clear base_case.
+  destruct list_of_all_primes as [prime_list].
+  remember (S (list_product prime_list)) as big_number.
+  pose proof everyone_is_divisible_by_a_prime big_number.
+
+  assert (~ In 0 prime_list) as prime_list_has_no_zero.
+  {
+    intro.
+    specialize (H 0).
+    firstorder.
+  }
+  pose proof list_product_not_zero prime_list prime_list_has_no_zero as lp_nz.
+  assert (2 <= big_number) as two_le_big_number.
+  omega.
+
+  apply H0 in two_le_big_number.
+  destruct two_le_big_number.
+  destruct H1.
+  rename x into new_prime.
+  exists new_prime.
+  split.
+  Focus 2.
+  assumption.
+
+  (* We'll show prime_bound < new_prime by first showing that new_prime isn't in prime_list. *)
+  assert (~ In new_prime prime_list).
+  Focus 2.
+
+  pose proof proj1 (H new_prime).
+  destruct (le_lt_dec new_prime prime_bound).
+  pose proof H4 l H1.
+  contradiction.
+  assumption.
+
+  intro.
+
+  assert (~ divides new_prime (list_product prime_list)).
+  {
+    intro.
+    pose proof proj1 H1 as two_le_new_prime.
+    assert (~ In 0 prime_list) as zero_not_in_prime_list.
+    {
+      intro.
+      pose proof proj1 (proj2 (H 0)) H5.
+      pose proof zero_not_prime.
+      contradiction.
+    }
+    pose proof list_product_not_zero prime_list zero_not_in_prime_list as prod_nz.
+    SearchAbout divides le.
+    pose proof divides_means_no_greater new_prime (list_product prime_list) prod_nz H4.
+    assert (2 <= list_product prime_list) as two_le_prod. omega.
+    pose proof incrementing_breaks_divisibility new_prime (list_product prime_list) two_le_new_prime two_le_prod H4.
+    subst.
+    contradiction.
+  }
+
+  pose proof list_product_divisible_by_all prime_list new_prime.
   firstorder.
 Qed.
 

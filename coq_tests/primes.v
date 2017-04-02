@@ -1406,7 +1406,7 @@ Proof.
   firstorder.
 Qed.
 
-Theorem there_is_always_a_bigger_prime : forall n, exists p, n < p /\ prime p.
+Theorem there_is_always_a_bigger_prime : forall n, exists p, p > n /\ prime p.
 Proof.
   intros.
   rename n into prime_bound.

@@ -3,17 +3,21 @@ Require Import Coq.Numbers.Natural.Peano.NPeano.
 Require Import Arith.
 Require Import Omega.
 
+Add LoadPath ".".
+Require Import well_founded.
+
 (* Some simple notations. *)
 Notation " [ ] " := nil.
 Notation " [ x ] " := (cons x nil).
+Notation " x :: y " := (cons x y).
 Notation " [ x ; .. ; y ] " := (cons x .. (cons y nil) ..).
 Infix "==n" := beq_nat (no associativity, at level 50).
 
 (* Define our notion of languages. *)
 
 Inductive bit :=
-  | bzero
-  | bone.
+  | B_zero
+  | B_one.
 
 Definition bits := list bit.
 
@@ -391,3 +395,313 @@ Proof.
   intros.
   prove_poly_bounded.
 Qed.
+
+(* Define some computational semantics. *)
+
+Inductive stack_program :=
+  | ISeq (p1 p2 : stack_program)
+  | IPush (stack b : bit) (c : stack_program)
+  | ILoop (stack : bit) (l : stack_program) (c : stack_program)
+  | IAccept
+  | IReject.
+
+Definition indexed_pop (index : bit) (stack1 stack2 : bits) : bit * bits * bits :=
+  match index with
+  | B_zero =>
+    match stack1 with
+    | nil => (B_zero, stack1, stack2)
+    | x :: stack1' => (x, stack1', stack2)
+    end
+  | B_one =>
+    match stack2 with
+    | nil => (B_zero, stack1, stack2)
+    | x :: stack2' => (x, stack1, stack2')
+    end
+  end.
+
+Fixpoint small_step_helper (p : stack_program) (stack1 stack2 : bits) : (stack_program * bits * bits) :=
+  match p with
+  | ISeq p1 p2 =>
+    match small_step_helper p1 stack1 stack2 with
+    | (_, stack1', stack2') =>
+      (p2, stack1', stack2')
+    end
+  | IPush index b c =>
+    match index with
+    | B_zero => (c, b :: stack1, stack2)
+    | B_one  => (c, stack1, b :: stack2)
+    end
+  | ILoop index l c =>
+    match indexed_pop index stack1 stack2 with
+    | (popped_bit, stack1', stack2') =>
+      match popped_bit with
+      | B_zero => (c, stack1', stack2')
+      | B_one  => ((ISeq l (ILoop index l c)), stack1', stack2')
+      end
+    end
+  | IAccept | IReject => (p, stack1, stack2)
+  end.
+
+Definition small_step (state : (stack_program * bits * bits)) : (stack_program * bits * bits) :=
+  match state with
+  | pair (pair p stack1) stack2 =>
+    small_step_helper p stack1 stack2
+  end.
+
+Fixpoint perform_n_steps n state :=
+  match n with
+  | 0 => state
+  | S n' => small_step (perform_n_steps n' state)
+  end.
+
+Notation " 'PushA' 0 " := (IPush B_zero B_zero).
+Notation " 'PushA' 1 " := (IPush B_zero B_one).
+Notation " 'PushB' 0 " := (IPush B_one B_zero).
+Notation " 'PushB' 1 " := (IPush B_one B_one).
+Notation " 'LoopA' " := (ILoop B_zero).
+Notation " 'LoopB' " := (ILoop B_one).
+Notation " a ; b " := (ISeq (a IReject) b) (at level 50).
+
+Definition tiny_prog : stack_program := IReject.
+
+Definition prog1 : stack_program :=
+  PushB 0 ; PushA 1 IReject.
+
+Definition prog2 : stack_program :=
+  PushA 1; LoopA (PushA 1 IReject) IReject.
+
+Definition is_work_state (program : stack_program * bits * bits) : Prop :=
+  let p := fst (fst program) in
+  p <> IAccept /\ p <> IReject.
+
+Definition is_halt_state (program : stack_program * bits * bits) : Prop :=
+  let p := fst (fst program) in
+  p = IAccept \/ p = IReject.
+
+Definition always_halts program : Prop :=
+  forall input, exists n,
+    let final_state := perform_n_steps n (program, input, []) in
+    is_halt_state final_state.
+
+Lemma halt_stays_halted :
+  forall triplet, is_halt_state triplet -> is_halt_state (small_step triplet).
+Proof.
+  intros.
+  unfold small_step.
+  destruct triplet.
+  destruct p.
+  destruct s; unfold is_halt_state in H; firstorder; simpl in H; discriminate.
+Qed.
+
+Lemma performing_steps_sums :
+  forall triplet n m, perform_n_steps n (perform_n_steps m triplet) = perform_n_steps (n + m) triplet.
+Proof.
+  intros.
+  induction n; simpl; try rewrite IHn; reflexivity.
+Qed.
+
+Lemma halt_stays_halted_forever :
+  forall triplet, is_halt_state triplet -> forall n, is_halt_state (perform_n_steps n triplet).
+Proof.
+  intros.
+  induction n.
+  { assumption. }
+  {
+    simpl.
+    exact (halt_stays_halted (perform_n_steps n triplet) IHn).
+  }
+Qed.
+
+Lemma le_decomp : forall a b, a <= b -> exists k, b = a + k.
+Proof.
+  intros.
+  induction b.
+  { exists 0. omega. }
+  {
+    destruct (eq_nat_dec a (S b)).
+    { exists 0. omega. }
+    {
+      assert (a <= b). omega.
+      firstorder.
+      exists (S x).
+      omega.
+    }
+  }
+Qed.
+
+Lemma halt_stays_halted_forever_alt :
+  forall triplet n m, n <= m -> is_halt_state (perform_n_steps n triplet) -> is_halt_state (perform_n_steps m triplet).
+Proof.
+  intros.
+  pose proof le_decomp n m H as decomp.
+  destruct decomp.
+  pose proof halt_stays_halted_forever (perform_n_steps n triplet) H0 x as big.
+  rewrite performing_steps_sums in big.
+  subst.
+  rewrite plus_comm.
+  assumption.
+Qed.
+
+Lemma work_halt_contradict : forall state, is_work_state state -> is_halt_state state -> False.
+Proof.
+  destruct state.
+  destruct p.
+  destruct s; firstorder.
+Qed.
+
+Theorem always_working_means_doesnt_halt :
+  forall program,
+    (exists input, forall n, exists n0, n <= n0 /\ is_work_state (perform_n_steps n0 (program, input, []))) ->
+    ~ always_halts program.
+Proof.
+  intros.
+  destruct H.
+  rename x into input.
+  intro.
+  unfold always_halts in H0.
+  specialize (H0 input).
+  destruct H0.
+  rename x into point_at_which_halts.
+  specialize (H point_at_which_halts).
+  destruct H.
+  rename x into still_working.
+  destruct H.
+  pose proof le_decomp point_at_which_halts still_working H.
+  destruct H2.
+  subst.
+  remember (perform_n_steps point_at_which_halts (program, input, [])) as halted.
+  pose proof halt_stays_halted_forever halted H0.
+  rewrite Heqhalted in H2.
+  specialize (H2 x).
+  rewrite performing_steps_sums in H2.
+  rewrite plus_comm in H1.
+  pose proof work_halt_contradict.
+  firstorder.
+Qed.
+
+Theorem tiny_halting : always_halts tiny_prog.
+Proof.
+  unfold always_halts.
+  intros.
+  exists 0.
+  simpl.
+  right.
+  reflexivity.
+Qed.
+
+Theorem halting1 : always_halts prog1.
+Proof.
+  unfold always_halts.
+  intros.
+  exists 2.
+  simpl.
+  right.
+  reflexivity.
+Defined.
+
+(* Begin code to convert always-halting stack machines into functions. *)
+
+Definition halts_at_n_predicate (p : stack_program) (stack1 stack2 : bits) (n : nat) : bool :=
+  let state := fst (fst (perform_n_steps n (p, stack1, stack2))) in
+  match state with
+  | IAccept | IReject => true
+  | _ => false
+  end.
+
+Lemma wtf : forall (t1 t2 : Type) (f : t1 -> t2) (a b : t1), a = b -> f a = f b.
+Proof.
+  intros.
+  f_equal.
+  assumption.
+Qed.
+
+Print wtf.
+Unset Implicit Arguments.
+Print f_equal.
+
+Print eq_refl.
+
+Compute (@eq_refl).
+
+Lemma dumb : forall (p1 p2 : Prop), (p1 = p2) -> (p2 -> p1).
+Proof.
+  firstorder.
+  rewrite H.
+  assumption.
+Qed.
+
+Theorem always_halts_means_many (p : stack_program) : always_halts p -> forall stack1, many_trues (halts_at_n_predicate p stack1 []).
+Proof.
+  intros.
+  unfold many_trues.
+  intros.
+  rename n into requested_point.
+  unfold always_halts in H.
+  specialize (H stack1).
+  destruct H.
+  rename x into halting_point.
+  destruct (le_gt_dec requested_point halting_point).
+  {
+    exists halting_point.
+    firstorder; unfold halts_at_n_predicate; setoid_rewrite H; reflexivity.
+  }
+  {
+    exists requested_point.
+    split; [ omega |].
+    apply halt_stays_halted_forever_alt with (m := requested_point) in H.
+    firstorder; unfold halts_at_n_predicate; setoid_rewrite H; reflexivity.
+    omega.
+  }
+Defined.
+
+Definition run_to_completion (p : stack_program) (halting : always_halts p) (stack1 : bits) : stack_program * bits * bits.
+  refine ((Fix (gen_call_r_wf
+    (halts_at_n_predicate p stack1 [])
+    (always_halts_means_many p halting stack1)) (fun nat => _) _) 2).
+  intros.
+
+  (* We now proceed to define our function. *)
+  intros.
+  rename x into step_number.
+  (* We now check if the function actually halts after x steps. *)
+  remember (halts_at_n_predicate p stack1 [] step_number) as answer.
+  destruct answer.
+  {
+    exact (perform_n_steps step_number (p, stack1, [])).
+  }
+  {
+    specialize (H (S step_number)).
+    unfold gen_call_r in H.
+
+    Lemma my_eq_sym : forall (A : Type) (x y : A), x = y -> y = x.
+    Proof.
+      exact (fun (A : Type) (x y : A) (H : x = y) =>
+match H in (_ = y0) return (y0 = x) with
+| eq_refl => eq_refl
+end).
+    Defined.
+
+    apply my_eq_sym in Heqanswer.
+    exact (H (conj Heqanswer (eq_refl (S step_number)))).
+  }
+Defined.
+
+Theorem only_one_answer : forall p input n m,
+  let comp1 := perform_n_steps n (p, input, []) in
+  let comp2 := perform_n_steps m (p, input, []) in
+  is_halt_state comp1 -> is_halt_state comp2 -> comp1 = comp2.
+Proof.
+  intros.
+  subst comp1 comp2.
+  (* TODO: Prove for n <= m, then handle general case. *)
+Admitted.
+
+Theorem run_to_completion_correct (p : stack_program) (input : bits) :
+  forall halting_proof n, is_halt_state (perform_n_steps n (p, input, [])) ->
+  run_to_completion p halting_proof input = perform_n_steps n (p, input, []).
+Proof.
+  intros.
+  unfold run_to_completion.
+  cbv.
+
+(* *)
